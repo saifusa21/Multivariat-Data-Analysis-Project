@@ -1,0 +1,412 @@
+---
+title: "STA631Project"
+author: "Abu, Sayed, Saheli"
+date: "4/25/2023"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Utility Functions
+```{r}
+
+precision = function(tbl) {
+  denom = (tbl[2,1]+tbl[2,2])
+  if(denom == 0){
+    return (NA)
+  }
+  return ((tbl[2,2]/denom) * 100)
+}
+
+recall = function(tbl) {
+  denom = (tbl[1,2]+tbl[2,2])
+  if(denom == 0){
+    return (NA)
+  }
+  return ((tbl[2,2]/denom) * 100)
+}
+
+accuracy = function(tbl) {
+  return (((tbl[1,1]+tbl[2,2])/(tbl[1,1]+tbl[1,2]+tbl[2,1]+tbl[2,2])) * 100)
+}
+
+minmax=function(v){
+  mx=max(v);
+  mn=min(v);
+  return((v-mn)/(mx-mn))
+}
+
+```
+
+# Exploratory Analysis
+
+
+# Load Data
+
+```{r }
+
+# Load necessary libraries
+library(ggplot2)
+library(dplyr)
+
+
+# Load Data
+bcw_data = read.csv("breast-cancer-wisconsin.data", sep = ",", header = FALSE)
+
+# Rename columns
+colnames(bcw_data) = c("id", "clumpThickness", "unifCellSize", "unifCellShape", "MarginalAdhesion", "SingEpCellSize", "BareNuclei", "BlandChromatin", "NormalNucleoli", "Mitosis", "Diagnosis")
+
+# Check summary for missing/noisy data
+for (i in 2:ncol(bcw_data)) {
+  bcw_data[,i] = as.factor(bcw_data[,i])
+}
+
+summary(bcw_data[,2:11], maxsum = 20)
+
+# Clean missing data
+bcw_data %>%
+  select(BareNuclei, Diagnosis) %>%
+  filter(BareNuclei == "?") %>%
+  group_by(Diagnosis) %>%
+  summarise(n())
+
+bcw_data %>%
+  select(BareNuclei, Diagnosis) %>%
+  group_by(BareNuclei, Diagnosis) %>%
+  summarise(n())
+
+bcw_data[bcw_data$BareNuclei=="?" & bcw_data$Diagnosis==2, 7] = 1
+bcw_data[bcw_data$BareNuclei=="?" & bcw_data$Diagnosis==4, 7] = 10
+
+# Convert columns to numeric and class to factor
+for(i in 1:(ncol(bcw_data) - 1)) {
+  bcw_data[, i] = as.numeric(as.character(bcw_data[, i]))
+}
+
+bcw_data[, 11] = as.factor(bcw_data[, 11])
+
+# Write cleaned data to CSV file
+write.csv(bcw_data, 'cleaneddata.csv', row.names = FALSE);
+
+# Compute correlation matrix
+cor_matrix <- cor(bcw_data[,2:10])
+
+# Plot heatmap of correlation matrix
+library(ggplot2)
+library(reshape2)
+
+cor_melted <- melt(cor_matrix)
+names(cor_melted) <- c("Variable 1", "Variable 2", "Correlation")
+ggplot(cor_melted, aes(x = `Variable 1`, y = `Variable 2`, fill = `Correlation`)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "blue", mid = "white", high = "green", midpoint = 0) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  labs(title = "Correlation Heatmap")
+
+# Scatterplot matrix
+library(GGally)
+ggpairs(bcw_data[, 2:11], mapping = aes(color = Diagnosis))
+
+
+```
+
+
+```{r}
+# Regression analysis
+library(caret)
+
+# Load cleaned data
+bcw_data <- read.csv("cleaneddata.csv")
+bcw_data$Diagnosis <- factor(bcw_data$Diagnosis, levels = c(2, 4), labels = c("benign", "malignant"))
+
+
+# Check data structure
+str(bcw_data)
+
+# Split data into training and testing sets
+trainIndex <- createDataPartition(bcw_data$Diagnosis, p = 0.8, list = FALSE, times = 1)
+train <- bcw_data[trainIndex,]
+test <- bcw_data[-trainIndex,]
+
+# Fit logistic regression model
+logistic_model <- train(Diagnosis ~ ., data = train, method = "glm", family = "binomial")
+
+# Check model performance on training data
+logistic_preds_train <- predict(logistic_model, newdata = train)
+confusionMatrix(logistic_preds_train, train$Diagnosis)
+
+# Predict on testing set
+logistic_preds_test <- predict(logistic_model, newdata = test)
+
+# Evaluate model performance
+cm.log <- confusionMatrix(logistic_preds_test, test$Diagnosis)
+
+
+
+```
+
+# Sampling for Data separation
+
+```{r}
+
+set.seed(1)
+
+partitions = sample(nrow(bcw_data)) %% 10
+
+table(partitions)
+
+
+```
+
+
+# 10-Fold Cross Validation
+
+```{r}
+
+### Include required libraries
+
+library(rpart.plot)
+library(e1071)
+library(nnet)
+library(fpc)
+library(NeuralNetTools)
+
+tbl = matrix(c(0,0,0,0), nrow = 2, byrow = TRUE)
+colnames(tbl) = c("actual(0)","actual(1)")
+rownames(tbl) = c("prediction(0)", "prediction(1)")
+
+
+### 10-Fold CV with Decision tree
+
+tree_data = bcw_data[-1]
+
+
+### change data for decision tree
+  
+for (i in 1:ncol(tree_data)) {
+  tree_data[ , i] = as.factor(tree_data[ , i])
+}
+
+summary(tree_data, maxsum = 20)
+
+cm.decision_tree = tbl
+
+for (i in 0:9){
+
+  ### Split data
+  
+  ind = partitions == i
+  test_data = tree_data[ind, ]
+  train_data = tree_data[-ind, ]
+  
+  
+  ### Model for Decision Tree
+  
+  set.seed(1)
+  
+  model.decision_tree = rpart(Diagnosis~., data = train_data)
+  
+  pred = predict(model.decision_tree, select(test_data, -Diagnosis), type = "class")
+  
+  cm.decision_tree = cm.decision_tree + table(pred, test_data$Diagnosis)
+  
+}
+
+rpart.plot(model.decision_tree)
+
+### Confusion matrix
+
+colnames(cm.decision_tree) = c('benign', 'malignant')
+rownames(cm.decision_tree) = c('benign', 'malignant')
+
+cm.decision_tree
+
+plot(cm.decision_tree, main = "Decision Tree Confusion Matrix", col = c("#F8766D", "#00BA38"), 
+     sub = paste("Accuracy =", round(accuracy(cm.decision_tree), 3)))
+
+### Accuracy of Decision Tree
+
+print(c("Precision:", precision(cm.decision_tree)))
+print(c("Recall:", recall(cm.decision_tree)))
+print(c("Accuracy:", accuracy(cm.decision_tree)))
+
+
+### 10-Fold CV with Naive Bayes
+
+nv_data = tree_data
+
+cm.naive_bayes = tbl
+
+for (i in 0:9) {
+  
+  ### Split data
+  
+  ind = partitions == i
+  test_data = nv_data[ind, ]
+  train_data = nv_data[-ind, ]
+  
+  
+  ### Model for Naive Bayes
+  
+  set.seed(1)
+  
+  model.naive_bayes = naiveBayes(Diagnosis~., data = train_data)
+  
+  pred = predict(model.naive_bayes, select(test_data, -Diagnosis))
+  
+  cm.naive_bayes = cm.naive_bayes + table(pred, test_data$Diagnosis)
+  
+}
+
+
+### Confusion matrix
+
+colnames(cm.naive_bayes) = c('benign', 'malignant')
+rownames(cm.naive_bayes) = c('benign', 'malignant')
+
+cm.naive_bayes
+
+plot(cm.naive_bayes, main = "Naive Bayes Confusion Matrix", col = c("#F8766D", "#00BA38"), 
+     sub = paste("Accuracy =", round(accuracy(cm.naive_bayes), 3)))
+
+### Accuracy of Naive Byes
+
+print(c("Precision:", precision(cm.naive_bayes)))
+print(c("Recall:", recall(cm.naive_bayes)))
+print(c("Accuracy:", accuracy(cm.naive_bayes)))
+
+
+### 10-Fold CV with ANN
+
+ann_data = bcw_data[-1]
+
+ann_data[, 10] = as.numeric(ann_data[, 10])
+ann_data[ann_data$Diagnosis == 1 , 10] = 0
+ann_data[ann_data$Diagnosis == 2 , 10] = 1
+
+cm.ann = tbl
+
+for (i in 0:9) {
+  
+  ### Split data
+  
+  ind = partitions == i
+  test_data = ann_data[ind, ]
+  train_data = ann_data[-ind, ]
+  
+  ### Model for ANN
+  
+  set.seed(1)
+  
+  model.ann = nnet(Diagnosis~., train_data, size = 5, type = "class", trace = FALSE, wgts = 0.1)
+  
+  pred = round(predict(model.ann, select(test_data, -Diagnosis)))
+  
+  cm.ann = cm.ann + table(pred, test_data$Diagnosis)
+  
+}
+
+plotnet(model.ann)
+
+### Confusion matrix
+
+colnames(cm.ann) = c('benign', 'malignant')
+rownames(cm.ann) = c('benign', 'malignant')
+
+cm.ann
+
+plot(cm.ann, main = "ANN Confusion Matrix", col = c("#F8766D", "#00BA38"), 
+     sub = paste("Accuracy =", round(accuracy(cm.ann), 3)))
+
+
+### Accuracy of ANN
+
+print(c("Precision:", precision(cm.ann)))
+print(c("Recall:", recall(cm.ann)))
+print(c("Accuracy:", accuracy(cm.ann)))
+
+
+### 10-Fold CV with Support Vector Machine
+
+svm_data = tree_data
+
+cm.svm = tbl
+
+for (i in 0:9) {
+  
+  ### Split data
+  
+  ind = partitions == i
+  test_data = svm_data[ind, ]
+  train_data = svm_data[-ind, ]
+  
+  ### Model for SVM
+  
+  set.seed(1)
+  
+  model.svm = svm(Diagnosis~., data = train_data, kernel = "linear", scale = FALSE)
+  
+  pred = predict(model.svm, select(test_data, -Diagnosis))
+  
+  cm.svm = cm.svm + table(pred, test_data$Diagnosis)
+  
+}
+
+### SVM model
+
+model.svm
+
+### Confusion matrix
+
+colnames(cm.svm) = c('benign', 'malignant')
+rownames(cm.svm) = c('benign', 'malignant')
+
+cm.svm
+
+plot(cm.svm, main = "SVM Confusion Matrix", col = c("#F8766D", "#00BA38"), 
+     sub = paste("Accuracy =", round(accuracy(cm.svm), 3)))
+
+
+### Accuracy of Support Vector Machine
+
+print(c("Precision:", precision(cm.svm)))
+print(c("Recall:", recall(cm.svm)))
+print(c("Accuracy:", accuracy(cm.svm)))
+
+
+### Comparisions
+
+rbind(c("Model", "Accuracy(%)"),c("Decision Tree", accuracy(cm.decision_tree)), c("Naive Bayes", accuracy(cm.naive_bayes)), c("ANN", accuracy(cm.ann)), c("SVM", accuracy(cm.svm)))
+
+sbs_barplot = matrix(nrow = 4, ncol = 3, dimnames = list(c('DT', 'SVM', 'ANN', 'NB'), c('Precision', 'Recall', 'Accuracy')))
+
+sbs_barplot['DT','Precision'] = precision(cm.decision_tree)
+sbs_barplot['DT','Recall'] = recall(cm.decision_tree)
+sbs_barplot['DT','Accuracy'] = accuracy(cm.decision_tree)
+
+sbs_barplot['SVM','Precision'] = precision(cm.svm)
+sbs_barplot['SVM','Recall'] = recall(cm.svm)
+sbs_barplot['SVM','Accuracy'] = accuracy(cm.svm)
+
+sbs_barplot['ANN','Precision'] = precision(cm.ann)
+sbs_barplot['ANN','Recall'] = recall(cm.ann)
+sbs_barplot['ANN','Accuracy'] = accuracy(cm.ann)
+
+sbs_barplot['NB','Precision'] = precision(cm.naive_bayes)
+sbs_barplot['NB','Recall'] = recall(cm.naive_bayes)
+sbs_barplot['NB','Accuracy'] = accuracy(cm.naive_bayes)
+
+#png("plot.png", width=900, height=600)
+
+barplot(sbs_barplot, main = "Comparison among all Models",beside = TRUE,
+        col=c('#77037B', '#210062', '#009FBD', '#F9E2AF'),
+        legend.text = rownames(sbs_barplot),
+        args.legend = list(x = "bottomright"))
+
+
+
+
+```
+
